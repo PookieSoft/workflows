@@ -19,11 +19,12 @@ uses: PookieSoft/workflows/.github/workflows/<workflow>.yml@<sha>
 
 ## Available reusable workflows
 
-| Workflow | Purpose |
-|---|---|
-| [`dependabot-auto-label.yml`](.github/workflows/dependabot-auto-label.yml) | Strip `major`/`minor` from Dependabot PRs and ensure only `patch` is set |
+| Workflow | Purpose | Inputs |
+|---|---|---|
+| [`dependabot-auto-label.yml`](.github/workflows/dependabot-auto-label.yml) | Strip `major`/`minor` from Dependabot PRs and ensure only `patch` is set | none |
+| [`security-scan.yml`](.github/workflows/security-scan.yml) | Trivy scan of repository (always) and published Docker image (main branch only) | `docker-image-name`, `scan-docker` |
 
-Planned additions: `pr-ci.yml`, `dependabot-pr-ci.yml`, `release.yml`, `security-scan.yml`.
+Planned additions: `pr-ci.yml`, `dependabot-pr-ci.yml`, `release.yml`.
 
 ## How callers use it
 
