@@ -1,0 +1,24 @@
+name: Install deps
+description: Install project dependencies using the appropriate package manager for the selected runtime.
+
+inputs:
+    runtime:
+        description: 'Which runtime: "bun" or "node".'
+        required: true
+    frozen-lockfile:
+        description: 'Use the lockfile as-is (fail if out of sync). Default true. Set false for Dependabot lockfile-sync flows.'
+        required: false
+        default: 'true'
+
+runs:
+    using: composite
+    steps:
+        - name: bun install
+          if: inputs.runtime == 'bun'
+          shell: bash
+          run: bun install ${{ inputs.frozen-lockfile == 'true' && '--frozen-lockfile' || '' }}
+
+        - name: npm ci / npm install
+          if: inputs.runtime == 'node'
+          shell: bash
+          run: ${{ inputs.frozen-lockfile == 'true' && 'npm ci' || 'npm install' }}

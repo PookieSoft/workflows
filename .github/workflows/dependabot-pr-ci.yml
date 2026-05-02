@@ -94,18 +94,10 @@ jobs:
                   ref: ${{ github.event.pull_request.head.sha }}
                   token: ${{ github.token }}
 
-            - name: Setup Bun
-              if: inputs.runtime == 'bun'
-              uses: oven-sh/setup-bun@v2
+            - name: Setup runtime
+              uses: PookieSoft/workflows/.github/actions/setup-runtime@v1
               with:
-                  bun-version: latest
-
-            - name: Setup Node.js
-              if: inputs.runtime == 'node'
-              uses: actions/setup-node@v4
-              with:
-                  node-version: 24
-                  registry-url: https://npm.pkg.github.com
+                  runtime: ${{ inputs.runtime }}
 
             - name: Sync bun.lock with package.json
               if: inputs.sync-bun-lock
@@ -124,21 +116,17 @@ jobs:
                       git push origin HEAD:${{ github.event.pull_request.head.ref }}
                   fi
 
-            - name: Run unit tests (bun)
-              if: inputs.runtime == 'bun'
+            - name: Install dependencies
+              uses: PookieSoft/workflows/.github/actions/install-deps@v1
+              with:
+                  runtime: ${{ inputs.runtime }}
               env:
                   NODE_AUTH_TOKEN: ${{ github.token }}
-              run: |
-                  bun install --frozen-lockfile
-                  bun run test
 
-            - name: Run unit tests (node)
-              if: inputs.runtime == 'node'
+            - name: Run unit tests
               env:
                   NODE_AUTH_TOKEN: ${{ github.token }}
-              run: |
-                  npm ci
-                  npm run test
+              run: ${{ inputs.runtime == 'bun' && 'bun run test' || 'npm run test' }}
 
             - name: Build local Docker image
               if: inputs.build-docker
