@@ -221,7 +221,7 @@ jobs:
               uses: appleboy/ssh-action@master
               env:
                   BRANCH_NAME: ${{ github.head_ref }}
-                  SERVICE: ${{ inputs.service-name-prefix }}
+                  SERVICE: ${{ inputs.service-name }}
               with:
                   host: ${{ secrets.SSH_HOST }}
                   username: ${{ secrets.SSH_USERNAME }}
