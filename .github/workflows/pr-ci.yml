@@ -108,34 +108,22 @@ jobs:
                           comment_id: ${{ steps.find-comment.outputs.comment-id }}
                       })
 
-            - name: Setup Bun
-              if: inputs.runtime == 'bun'
-              uses: oven-sh/setup-bun@v2
+            - name: Setup runtime
+              uses: PookieSoft/workflows/.github/actions/setup-runtime@v1
               with:
-                  bun-version: latest
+                  runtime: ${{ inputs.runtime }}
 
-            - name: Setup Node.js
-              if: inputs.runtime == 'node'
-              uses: actions/setup-node@v4
+            - name: Install dependencies
+              uses: PookieSoft/workflows/.github/actions/install-deps@v1
               with:
-                  node-version: 24
-                  registry-url: https://npm.pkg.github.com
-
-            - name: Run unit tests with coverage (bun)
-              if: inputs.runtime == 'bun'
+                  runtime: ${{ inputs.runtime }}
               env:
                   NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-              run: |
-                  bun install --frozen-lockfile
-                  bun run test
 
-            - name: Run unit tests with coverage (node)
-              if: inputs.runtime == 'node'
+            - name: Run unit tests with coverage
               env:
                   NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-              run: |
-                  npm ci
-                  npm run test
+              run: ${{ inputs.runtime == 'bun' && 'bun run test' || 'npm run test' }}
 
             - name: Generate coverage report
               if: inputs.coverage-comment

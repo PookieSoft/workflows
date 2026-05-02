@@ -1,0 +1,42 @@
+name: Setup runtime
+description: Install and configure either bun or node based on a runtime input.
+
+inputs:
+    runtime:
+        description: 'Which runtime to set up: "bun" or "node".'
+        required: true
+    node-version:
+        description: 'Node.js version (when runtime=node).'
+        required: false
+        default: '24'
+    bun-version:
+        description: 'Bun version (when runtime=bun).'
+        required: false
+        default: 'latest'
+    registry-url:
+        description: 'NPM registry URL (when runtime=node) — defaults to GitHub Packages so @pookiesoft scoped deps resolve.'
+        required: false
+        default: 'https://npm.pkg.github.com'
+
+runs:
+    using: composite
+    steps:
+        - name: Setup Bun
+          if: inputs.runtime == 'bun'
+          uses: oven-sh/setup-bun@v2
+          with:
+              bun-version: ${{ inputs.bun-version }}
+
+        - name: Setup Node.js
+          if: inputs.runtime == 'node'
+          uses: actions/setup-node@v4
+          with:
+              node-version: ${{ inputs.node-version }}
+              registry-url: ${{ inputs.registry-url }}
+
+        - name: Validate runtime input
+          if: inputs.runtime != 'bun' && inputs.runtime != 'node'
+          shell: bash
+          run: |
+              echo "::error::Unknown runtime '${{ inputs.runtime }}'. Expected 'bun' or 'node'."
+              exit 1

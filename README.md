@@ -32,9 +32,11 @@ uses: PookieSoft/workflows/.github/workflows/<workflow>.yml@<sha>
 
 ### Composite actions
 
-| Action | Purpose |
-|---|---|
-| [`coverage-comment`](.github/actions/coverage-comment/action.yml) | Build a markdown coverage report from `coverage/coverage-summary.json` and emit it as a step output |
+| Action | Purpose | Inputs |
+|---|---|---|
+| [`coverage-comment`](.github/actions/coverage-comment/action.yml) | Build a markdown coverage report from `coverage/coverage-summary.json` and emit it as a step output | none |
+| [`setup-runtime`](.github/actions/setup-runtime/action.yml) | Install and configure either bun or node based on a runtime input | `runtime` |
+| [`install-deps`](.github/actions/install-deps/action.yml) | Install project dependencies via `bun install --frozen-lockfile` or `npm ci` | `runtime` |
 
 ## How callers use it
 
@@ -74,4 +76,4 @@ jobs:
 
 ## Access
 
-This repo is private to PookieSoft. Org access is enabled so any repo in the org can `uses:` workflows from here.
+This repo is **public** so reusable workflows can be called from any PookieSoft repo. Sharing private reusable workflows across repos requires a paid GitHub plan (Team / Enterprise); the org is on Free, so making the workflows themselves public is the standard pattern. The workflows contain no secrets — those flow via `secrets: inherit` from each consumer repo.

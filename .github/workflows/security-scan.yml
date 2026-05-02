@@ -1,0 +1,99 @@
+name: Security Scan (reusable)
+
+# Reusable workflow that runs Trivy against the repository filesystem (always)
+# and against a published Docker image (only on main). Both scan results are
+# uploaded as SARIF to the calling repository's Security tab.
+#
+# Caller example:
+#
+#   name: Security Scan
+#   on:
+#       schedule:
+#           - cron: '0 9 * * 1'
+#       workflow_dispatch:
+#       push:
+#           branches: [main]
+#       pull_request:
+#           branches: [main]
+#   permissions:
+#       contents: read
+#       security-events: write
+#       actions: read
+#   jobs:
+#       scan:
+#           uses: PookieSoft/workflows/.github/workflows/security-scan.yml@v1
+#           with:
+#               docker-image-name: bongbot-quote
+#           secrets: inherit
+
+on:
+    workflow_call:
+        inputs:
+            docker-image-name:
+                description: 'Docker image to scan (without tag) — e.g. bongbot-quote. Pulled from secrets.DOCKERHUB_USERNAME/<image>:latest. Required if scan-docker is true.'
+                type: string
+                required: false
+                default: ''
+            scan-docker:
+                description: 'Whether to scan a published Docker image. Disable for library-only repos (e.g. BongBot-Core).'
+                type: boolean
+                required: false
+                default: true
+        secrets:
+            DOCKERHUB_USERNAME:
+                description: 'Docker Hub username, used to construct the image reference.'
+                required: false
+
+jobs:
+    repository-scan:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            security-events: write
+            actions: read
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v5
+
+            - name: Run Trivy vulnerability scanner on repository
+              uses: aquasecurity/trivy-action@master
+              with:
+                  scan-type: 'fs'
+                  scan-ref: '.'
+                  format: 'sarif'
+                  output: 'trivy-repo-results.sarif'
+
+            - name: Upload repository scan results to GitHub Security tab
+              if: always()
+              uses: github/codeql-action/upload-sarif@v3
+              with:
+                  sarif_file: 'trivy-repo-results.sarif'
+                  category: 'repository-scan'
+
+    docker-scan:
+        if: inputs.scan-docker && github.ref == 'refs/heads/main'
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            security-events: write
+            actions: read
+        steps:
+            - name: Validate inputs
+              if: inputs.docker-image-name == ''
+              run: |
+                  echo "::error::scan-docker is true but docker-image-name was not provided"
+                  exit 1
+
+            - name: Run Trivy vulnerability scanner on Docker image
+              uses: aquasecurity/trivy-action@master
+              with:
+                  image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.docker-image-name }}:latest
+                  format: 'sarif'
+                  output: 'trivy-docker-results.sarif'
+
+            - name: Upload Docker scan results to GitHub Security tab
+              if: always()
+              uses: github/codeql-action/upload-sarif@v3
+              with:
+                  sarif_file: 'trivy-docker-results.sarif'
+                  category: 'docker-scan'
