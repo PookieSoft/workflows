@@ -52,6 +52,10 @@ on:
                 description: 'Whether to SSH into the dev host and (re)start the per-branch service.'
                 type: boolean
                 default: false
+            service-name:
+                description: 'systemd unit name prefix for ssh-deploy.`.'
+                type: string
+                default: ''
         secrets:
             DOCKERHUB_USERNAME: { required: false }
             DOCKERHUB_TOKEN:    { required: false }
@@ -217,7 +221,7 @@ jobs:
               uses: appleboy/ssh-action@master
               env:
                   BRANCH_NAME: ${{ github.head_ref }}
-                  SERVICE: ${{ inputs.service-name-prefix }}@${{ github.head_ref }}
+                  SERVICE: ${{ inputs.service-name-prefix }}
               with:
                   host: ${{ secrets.SSH_HOST }}
                   username: ${{ secrets.SSH_USERNAME }}
