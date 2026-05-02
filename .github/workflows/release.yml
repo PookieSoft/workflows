@@ -236,9 +236,6 @@ jobs:
         if: inputs.publish-package
         needs: release
         runs-on: ubuntu-latest
-        permissions:
-            contents: read
-            packages: write
         steps:
             - name: Checkout code
               uses: actions/checkout@v5
