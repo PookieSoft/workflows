@@ -74,6 +74,14 @@ jobs:
         if: github.actor != 'dependabot[bot]'
         environment: ${{ inputs.environment }}
         runs-on: ubuntu-latest
+        # `gh pr create --label X` fires both `opened` and `labeled` events in
+        # quick succession, producing duplicate workflow runs. Cancel any
+        # in-flight run for the same PR so only the latest event completes.
+        # Cancellation mid-build is safe — Docker tags only resolve on full
+        # push, and SSH service starts are idempotent.
+        concurrency:
+            group: pr-ci-${{ github.event.pull_request.number }}
+            cancel-in-progress: true
         permissions:
             checks: write
             pull-requests: write
