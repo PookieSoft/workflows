@@ -19,11 +19,22 @@ uses: PookieSoft/workflows/.github/workflows/<workflow>.yml@<sha>
 
 ## Available reusable workflows
 
-| Workflow | Purpose |
-|---|---|
-| [`dependabot-auto-label.yml`](.github/workflows/dependabot-auto-label.yml) | Strip `major`/`minor` from Dependabot PRs and ensure only `patch` is set |
+### Reusable workflows
 
-Planned additions: `pr-ci.yml`, `dependabot-pr-ci.yml`, `release.yml`, `security-scan.yml`.
+| Workflow | Purpose | Required inputs |
+|---|---|---|
+| [`dependabot-auto-label.yml`](.github/workflows/dependabot-auto-label.yml) | Strip `major`/`minor` from Dependabot PRs and ensure only `patch` is set | none |
+| [`security-scan.yml`](.github/workflows/security-scan.yml) | Trivy scan of repo filesystem (always) and Docker image (main only) | `docker-image-name` |
+| [`docker-vuln-pr.yml`](.github/workflows/docker-vuln-pr.yml) | On main: snapshot CVE baseline. On schedule: open a PR if new CVEs appeared | `docker-image-name` |
+| [`pr-ci.yml`](.github/workflows/pr-ci.yml) | Human-PR CI: tests, coverage comment, optional Docker build/smoke/SSH-deploy | `runtime` |
+| [`dependabot-pr-ci.yml`](.github/workflows/dependabot-pr-ci.yml) | Single integrated Dependabot flow: enforce patch label → sync lockfile → tests → smoke | `runtime` |
+| [`release.yml`](.github/workflows/release.yml) | Push-to-main release: tests, version bump from PR labels, Docker push, optional npm publish, GitHub Release | `runtime` |
+
+### Composite actions
+
+| Action | Purpose |
+|---|---|
+| [`coverage-comment`](.github/actions/coverage-comment/action.yml) | Build a markdown coverage report from `coverage/coverage-summary.json` and emit it as a step output |
 
 ## How callers use it
 

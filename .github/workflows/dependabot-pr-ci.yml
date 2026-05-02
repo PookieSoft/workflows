@@ -1,0 +1,189 @@
+name: Dependabot PR CI (reusable)
+
+# Reusable workflow for Dependabot PRs. Single integrated flow:
+#   1. Enforce patch-only label (strip major/minor that Dependabot auto-applies)
+#   2. Sync bun.lock against the just-bumped package.json (bun-runtime repos
+#      with both lockfiles only)
+#   3. Run unit tests with coverage
+#   4. (optional) Build a local Docker image and run a smoke test
+#
+# Uses pull_request_target so org-level secrets are available; the PR head SHA
+# is checked out explicitly. The actor gate (`github.actor == 'dependabot[bot]'`)
+# ensures only Dependabot-authored PRs reach the work steps.
+#
+# Caller example:
+#
+#   on:
+#       pull_request_target:
+#           types: [opened, synchronize, reopened]
+#           branches: [main]
+#   permissions:
+#       contents: write
+#       pull-requests: write
+#   jobs:
+#       ci:
+#           uses: PookieSoft/workflows/.github/workflows/dependabot-pr-ci.yml@v1
+#           with:
+#               runtime: bun
+#               sync-bun-lock: true
+#               build-docker: true
+#               smoke-test: true
+#               docker-image-name: bongbot-quote-dependabot-test
+#           secrets: inherit
+
+on:
+    workflow_call:
+        inputs:
+            runtime:
+                description: 'Runtime to test on: "bun" or "node".'
+                type: string
+                required: true
+            sync-bun-lock:
+                description: 'Regenerate and commit bun.lock when Dependabot updates package.json without touching it (bun-runtime repos with dual lockfiles).'
+                type: boolean
+                default: false
+            build-docker:
+                description: 'Whether to build a local Docker image (no push) for the smoke test.'
+                type: boolean
+                default: false
+            smoke-test:
+                description: 'Whether to smoke-test the built Docker container. Requires build-docker.'
+                type: boolean
+                default: false
+            docker-image-name:
+                description: 'Local Docker image tag prefix (e.g. bongbot-quote-dependabot-test).'
+                type: string
+                default: ''
+            environment:
+                description: 'GitHub Actions environment to run in (Dev/Prod/etc).'
+                type: string
+                default: 'Dev'
+        secrets:
+            DISCORD_API_KEY:    { required: false }
+            DISCORD_CHANNEL_ID: { required: false }
+
+jobs:
+    dependabot-ci:
+        if: github.actor == 'dependabot[bot]'
+        environment: ${{ inputs.environment }}
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+            pull-requests: write
+            packages: read
+        # Concurrency cap: many `synchronize` events can fire in rapid succession when
+        # Dependabot rebases. Cancel in-flight runs for the same PR so only the latest
+        # event produces a completed job.
+        concurrency:
+            group: dependabot-pr-ci-${{ github.event.pull_request.number }}
+            cancel-in-progress: true
+        steps:
+            - name: Enforce patch-only label
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  PR_NUMBER: ${{ github.event.pull_request.number }}
+                  REPO: ${{ github.repository }}
+              run: |
+                  gh pr edit "$PR_NUMBER" -R "$REPO" --remove-label major || true
+                  gh pr edit "$PR_NUMBER" -R "$REPO" --remove-label minor || true
+                  gh pr edit "$PR_NUMBER" -R "$REPO" --add-label patch
+
+            - name: Checkout PR head
+              uses: actions/checkout@v5
+              with:
+                  ref: ${{ github.event.pull_request.head.sha }}
+                  token: ${{ github.token }}
+
+            - name: Setup Bun
+              if: inputs.runtime == 'bun'
+              uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: latest
+
+            - name: Setup Node.js
+              if: inputs.runtime == 'node'
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  registry-url: https://npm.pkg.github.com
+
+            - name: Sync bun.lock with package.json
+              if: inputs.sync-bun-lock
+              env:
+                  NODE_AUTH_TOKEN: ${{ github.token }}
+              run: |
+                  bun install --ignore-scripts
+                  if git diff --quiet bun.lock; then
+                      echo "bun.lock already in sync."
+                  else
+                      echo "bun.lock out of sync — committing regenerated lockfile."
+                      git config user.name "dependabot[bot]"
+                      git config user.email "49699333+dependabot[bot]@users.noreply.github.com"
+                      git add bun.lock
+                      git commit -m "[dependabot] sync bun.lock with package.json"
+                      git push origin HEAD:${{ github.event.pull_request.head.ref }}
+                  fi
+
+            - name: Run unit tests (bun)
+              if: inputs.runtime == 'bun'
+              env:
+                  NODE_AUTH_TOKEN: ${{ github.token }}
+              run: |
+                  bun install --frozen-lockfile
+                  bun run test
+
+            - name: Run unit tests (node)
+              if: inputs.runtime == 'node'
+              env:
+                  NODE_AUTH_TOKEN: ${{ github.token }}
+              run: |
+                  npm ci
+                  npm run test
+
+            - name: Build local Docker image
+              if: inputs.build-docker
+              uses: docker/build-push-action@v6
+              with:
+                  context: .
+                  push: false
+                  load: true
+                  secrets: |
+                      NODE_AUTH_TOKEN=${{ github.token }}
+                  tags: ${{ inputs.docker-image-name }}:dependabot-pr-${{ github.event.pull_request.number }}
+
+            - name: Smoke-test local container
+              if: inputs.smoke-test
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  PR_NUMBER: ${{ github.event.pull_request.number }}
+                  IMAGE: ${{ inputs.docker-image-name }}
+              run: |
+                  cat <<EOF > .env.test
+                  DISCORD_API_KEY=${{ secrets.DISCORD_API_KEY }}
+                  DISCORD_CHANNEL_ID=${{ secrets.DISCORD_CHANNEL_ID }}
+                  EOF
+
+                  docker run -d \
+                      --name dep-smoke-test \
+                      --env-file ./.env.test \
+                      "$IMAGE:dependabot-pr-$PR_NUMBER"
+
+                  echo "Waiting 15s for container to initialise..."
+                  sleep 15
+
+                  if [ "$(docker ps -q -f name=dep-smoke-test)" ]; then
+                      echo "Smoke test passed."
+                      docker stop dep-smoke-test
+                      docker rm dep-smoke-test
+                      gh pr comment "$PR_NUMBER" --body "**Dependabot Smoke Test Passed** :white_check_mark:
+                  The container started and stayed up during the smoke test."
+                  else
+                      LOGS=$(docker logs dep-smoke-test 2>&1)
+                      docker rm dep-smoke-test
+                      gh pr comment "$PR_NUMBER" --body "**Dependabot Smoke Test Failed** :x:
+                  The container exited unexpectedly. Logs:
+                  \`\`\`
+                  ${LOGS}
+                  \`\`\`"
+                      exit 1
+                  fi

@@ -1,0 +1,253 @@
+name: Release (reusable)
+
+# Reusable production-release workflow. Runs on push to main. Determines the
+# version bump from the merged PR's labels (or commit-message fallback), tags
+# a new version, optionally builds and pushes a Docker image, optionally
+# publishes an npm package to GitHub Packages, and creates a GitHub Release.
+#
+# Caller example:
+#
+#   on:
+#       push:
+#           branches: [main]
+#   jobs:
+#       release:
+#           uses: PookieSoft/workflows/.github/workflows/release.yml@v1
+#           with:
+#               runtime: bun
+#               build-docker: true
+#               docker-image-name: bongbot-quote
+#               publish-package: true
+#               codecov-slug: PookieSoft/BongBot-Quote
+#           secrets: inherit
+
+on:
+    workflow_call:
+        inputs:
+            runtime:
+                description: 'Runtime for tests: "bun" or "node".'
+                type: string
+                required: true
+            build-docker:
+                description: 'Whether to build and push a Docker image as part of the release.'
+                type: boolean
+                default: false
+            docker-image-name:
+                description: 'Docker image name (without tag) to publish — e.g. bongbot-quote.'
+                type: string
+                default: ''
+            publish-package:
+                description: 'Whether to publish an npm package to GitHub Packages.'
+                type: boolean
+                default: false
+            codecov-slug:
+                description: 'Codecov repository slug — e.g. PookieSoft/BongBot-Quote.'
+                type: string
+                default: ''
+            environment:
+                description: 'GitHub Actions environment.'
+                type: string
+                default: 'Prod'
+        secrets:
+            DOCKERHUB_USERNAME: { required: false }
+            DOCKERHUB_TOKEN:    { required: false }
+            CODECOV_TOKEN:      { required: false }
+        outputs:
+            new_tag:
+                description: 'The new version tag created by this release.'
+                value: ${{ jobs.release.outputs.new_tag }}
+
+jobs:
+    release:
+        environment: ${{ inputs.environment }}
+        runs-on: ubuntu-latest
+        outputs:
+            new_tag: ${{ steps.get_version.outputs.new_tag }}
+        permissions:
+            contents: write
+            pull-requests: read
+            packages: read
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v5
+              with:
+                  fetch-depth: 0
+
+            - name: Setup Bun
+              if: inputs.runtime == 'bun'
+              uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: latest
+
+            - name: Setup Node.js
+              if: inputs.runtime == 'node'
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  registry-url: https://npm.pkg.github.com
+
+            - name: Run unit tests with coverage (bun)
+              if: inputs.runtime == 'bun'
+              env:
+                  NODE_AUTH_TOKEN: ${{ github.token }}
+                  JEST_JUNIT_OUTPUT_DIR: ./test-results
+                  JEST_JUNIT_OUTPUT_NAME: junit.xml
+              run: |
+                  bun install --frozen-lockfile
+                  bun run test
+
+            - name: Run unit tests with coverage (node)
+              if: inputs.runtime == 'node'
+              env:
+                  NODE_AUTH_TOKEN: ${{ github.token }}
+                  JEST_JUNIT_OUTPUT_DIR: ./test-results
+                  JEST_JUNIT_OUTPUT_NAME: junit.xml
+              run: |
+                  npm ci
+                  npm run test
+
+            - name: Upload coverage to Codecov
+              if: inputs.codecov-slug != ''
+              uses: codecov/codecov-action@v5
+              with:
+                  token: ${{ secrets.CODECOV_TOKEN }}
+                  slug: ${{ inputs.codecov-slug }}
+                  file: ./coverage/lcov.info
+                  flags: production
+                  name: production-coverage
+                  fail_ci_if_error: false
+                  override_branch: main
+                  override_commit: ${{ github.sha }}
+
+            - name: Upload test results to Codecov
+              if: inputs.codecov-slug != '' && !cancelled()
+              uses: codecov/test-results-action@v1
+              with:
+                  token: ${{ secrets.CODECOV_TOKEN }}
+                  name: production-test-results
+                  flags: production,tests
+                  fail_ci_if_error: false
+
+            - name: Find merged PR
+              id: find_pr
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  pr_number=$(gh pr list --state merged --json number,mergeCommit \
+                      --jq ".[] | select(.mergeCommit.oid == \"${{ github.sha }}\") | .number")
+
+                  if [ -n "$pr_number" ]; then
+                      labels=$(gh pr view "$pr_number" --json labels --jq '(.labels // []) | map(.name) | join(",")')
+                      echo "number=$pr_number" >> "$GITHUB_OUTPUT"
+                      echo "labels=$labels" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "number=" >> "$GITHUB_OUTPUT"
+                      echo "labels=" >> "$GITHUB_OUTPUT"
+                  fi
+
+            - name: Determine version bump level
+              id: get_level
+              env:
+                  PR_NUMBER: ${{ steps.find_pr.outputs.number }}
+                  PR_LABELS: ${{ steps.find_pr.outputs.labels }}
+              run: |
+                  level=""
+                  if [ -n "$PR_NUMBER" ]; then
+                      if [[ "$PR_LABELS" == *"major"* ]]; then
+                          level="major"
+                      elif [[ "$PR_LABELS" == *"minor"* ]]; then
+                          level="minor"
+                      elif [[ "$PR_LABELS" == *"patch"* ]]; then
+                          level="patch"
+                      fi
+                  fi
+
+                  if [ -z "$level" ]; then
+                      msg=$(git log -1 --pretty=%B)
+                      if [[ "$msg" == *"[major]"* || "$msg" == *"major:"* ]]; then
+                          level="major"
+                      elif [[ "$msg" == *"[minor]"* || "$msg" == *"minor:"* ]]; then
+                          level="minor"
+                      else
+                          level="patch"
+                      fi
+                  fi
+
+                  echo "level=$level" >> "$GITHUB_OUTPUT"
+
+            - name: Get next version (dry run)
+              id: get_version
+              uses: anothrNick/github-tag-action@1.75.0
+              env:
+                  GITHUB_TOKEN: ${{ github.token }}
+                  DEFAULT_BUMP: ${{ steps.get_level.outputs.level }}
+                  TAG_PREFIX: v
+                  DRY_RUN: true
+
+            - name: Login to Docker Hub
+              if: inputs.build-docker
+              uses: docker/login-action@v3
+              with:
+                  username: ${{ secrets.DOCKERHUB_USERNAME }}
+                  password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+            - name: Build and push Docker image
+              if: inputs.build-docker
+              uses: docker/build-push-action@v6
+              with:
+                  context: .
+                  push: true
+                  secrets: |
+                      NODE_AUTH_TOKEN=${{ github.token }}
+                  tags: |
+                      ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.docker-image-name }}:${{ steps.get_version.outputs.new_tag }}
+                      ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.docker-image-name }}:latest
+
+            - name: Push new version tag
+              if: success()
+              uses: anothrNick/github-tag-action@1.75.0
+              env:
+                  GITHUB_TOKEN: ${{ github.token }}
+                  DEFAULT_BUMP: ${{ steps.get_level.outputs.level }}
+                  TAG_PREFIX: v
+
+            - name: Create GitHub Release
+              if: success()
+              uses: softprops/action-gh-release@v2
+              with:
+                  tag_name: ${{ steps.get_version.outputs.new_tag }}
+                  name: Release ${{ steps.get_version.outputs.new_tag }}
+                  body: |
+                      ${{ github.event.head_commit.message }}
+                  draft: false
+                  prerelease: false
+
+    publish:
+        if: inputs.publish-package
+        needs: release
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            packages: write
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v5
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  registry-url: https://npm.pkg.github.com
+
+            - name: Install dependencies
+              env:
+                  NODE_AUTH_TOKEN: ${{ github.token }}
+              run: npm ci
+
+            - name: Set version
+              run: npm version "${{ needs.release.outputs.new_tag }}" --no-git-tag-version --allow-same-version
+
+            - name: Publish package
+              env:
+                  NODE_AUTH_TOKEN: ${{ github.token }}
+              run: npm publish

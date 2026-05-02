@@ -1,0 +1,102 @@
+name: Coverage comment
+description: Generate a markdown coverage report from coverage/coverage-summary.json and expose it as a step output.
+
+outputs:
+    report:
+        description: 'Markdown coverage report (or a fallback message if the summary file is missing)'
+        value: ${{ steps.generate.outputs.report }}
+
+runs:
+    using: composite
+    steps:
+        - name: Install bc
+          shell: bash
+          run: sudo apt-get update -qq && sudo apt-get install -y -qq bc
+
+        - name: Generate coverage report
+          id: generate
+          shell: bash
+          run: |
+              if [ ! -f coverage/coverage-summary.json ]; then
+                  echo "report=:x: Coverage summary not found at coverage/coverage-summary.json" >> "$GITHUB_OUTPUT"
+                  exit 0
+              fi
+
+              indicator() {
+                  local pct=$1
+                  if (( $(echo "$pct >= 90" | bc -l) )); then echo ":green_circle: **$pct%**"
+                  elif (( $(echo "$pct >= 80" | bc -l) )); then echo ":yellow_circle: **$pct%**"
+                  elif (( $(echo "$pct >= 60" | bc -l) )); then echo ":orange_circle: **$pct%**"
+                  else echo ":red_circle: **$pct%**"
+                  fi
+              }
+
+              tot_lines=$(jq -r '.total.lines.pct // 0' coverage/coverage-summary.json)
+              tot_stmt=$(jq -r '.total.statements.pct // 0' coverage/coverage-summary.json)
+              tot_func=$(jq -r '.total.functions.pct // 0' coverage/coverage-summary.json)
+              tot_branch=$(jq -r '.total.branches.pct // 0' coverage/coverage-summary.json)
+
+              report="## :bar_chart: Test Coverage Report
+
+              ### :chart_with_upwards_trend: Coverage Table
+
+              | File | Statements | Branches | Functions | Lines | Issues |
+              |------|------------|----------|-----------|-------|--------|
+              | **:earth_africa: All files** | $(indicator "$tot_stmt") | $(indicator "$tot_branch") | $(indicator "$tot_func") | $(indicator "$tot_lines") | |"
+
+              declare -A dir_files
+              for path in $(jq -r 'keys[]' coverage/coverage-summary.json | grep -v '^total$'); do
+                  if [[ "$path" == /* ]]; then
+                      rel=$(echo "$path" | sed 's|^/home/[^/]*/[^/]*/||')
+                  else
+                      rel="$path"
+                  fi
+                  if [[ "$rel" == *node_modules* || "$rel" == *coverage/* ]]; then continue; fi
+
+                  d=$(dirname "$rel")
+                  f=$(basename "$rel")
+
+                  s=$(jq -r ".[\"$path\"].statements.pct // 0" coverage/coverage-summary.json)
+                  b=$(jq -r ".[\"$path\"].branches.pct // 0" coverage/coverage-summary.json)
+                  fn=$(jq -r ".[\"$path\"].functions.pct // 0" coverage/coverage-summary.json)
+                  l=$(jq -r ".[\"$path\"].lines.pct // 0" coverage/coverage-summary.json)
+
+                  issues=""
+                  (( $(echo "$s < 80" | bc -l) )) && issues="$issues Statements"
+                  (( $(echo "$b < 80" | bc -l) )) && issues="$issues Branches"
+                  (( $(echo "$fn < 80" | bc -l) )) && issues="$issues Functions"
+                  (( $(echo "$l < 80" | bc -l) )) && issues="$issues Lines"
+                  if [ -n "$issues" ]; then issues=":warning: Low:$issues"; else issues=":white_check_mark: Good"; fi
+
+                  row="| \`$f\` | $(indicator "$s") | $(indicator "$b") | $(indicator "$fn") | $(indicator "$l") | $issues |"
+                  dir_files[$d]="${dir_files[$d]}$row\n"
+              done
+
+              for d in $(printf '%s\n' "${!dir_files[@]}" | sort); do
+                  if [ "$d" != "." ]; then
+                      report="$report
+              | **:file_folder: $d** | | | | | |"
+                  fi
+                  report="$report
+              $(echo -e "${dir_files[$d]}" | sed '/^$/d')"
+              done
+
+              report="$report
+
+              ### :clipboard: Legend
+              - :green_circle: **Excellent** (≥90%)
+              - :yellow_circle: **Good** (≥80%)
+              - :orange_circle: **Fair** (≥60%)
+              - :red_circle: **Poor** (<60%)
+
+              ### :bar_chart: Overall Summary
+              - **Statements:** ${tot_stmt}%
+              - **Branches:** ${tot_branch}%
+              - **Functions:** ${tot_func}%
+              - **Lines:** ${tot_lines}%"
+
+              {
+                  echo "report<<COVEOF"
+                  echo "$report"
+                  echo "COVEOF"
+              } >> "$GITHUB_OUTPUT"

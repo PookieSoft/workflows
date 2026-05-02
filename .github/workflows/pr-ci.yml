@@ -1,0 +1,257 @@
+name: PR CI (reusable)
+
+# Reusable workflow for PR CI on user-authored pull requests. Runs tests with
+# coverage, optionally builds and smoke-tests a Docker image, optionally SSH-
+# deploys it to the dev environment, and posts a coverage comment back.
+#
+# Dependabot PRs are NOT handled by this workflow (the job is gated on
+# `github.actor != 'dependabot[bot]'`). See dependabot-pr-ci.yml for that path.
+#
+# Caller example:
+#
+#   on:
+#       pull_request:
+#           types: [opened, synchronize, labeled]
+#           branches: [main]
+#   jobs:
+#       ci:
+#           uses: PookieSoft/workflows/.github/workflows/pr-ci.yml@v1
+#           with:
+#               runtime: bun
+#               build-docker: true
+#               smoke-test: true
+#               ssh-deploy: true
+#               docker-image-name: bongbot-quote-develop
+#               service-name-prefix: bongbot-quote-develop
+#           secrets: inherit
+
+on:
+    workflow_call:
+        inputs:
+            runtime:
+                description: 'Runtime to test on: "bun" or "node".'
+                type: string
+                required: true
+            build-docker:
+                description: 'Whether to build and push a Docker image for this PR.'
+                type: boolean
+                default: false
+            smoke-test:
+                description: 'Whether to smoke-test the built Docker container. Requires build-docker.'
+                type: boolean
+                default: false
+            ssh-deploy:
+                description: 'Whether to SSH into the dev host and (re)start the per-branch service.'
+                type: boolean
+                default: false
+            docker-image-name:
+                description: 'Docker image name (without tag) used for build-docker / smoke-test. e.g. bongbot-quote-develop.'
+                type: string
+                default: ''
+            service-name-prefix:
+                description: 'systemd unit name prefix for ssh-deploy. The unit is `<prefix>@<branch>`.'
+                type: string
+                default: ''
+            coverage-comment:
+                description: 'Whether to post a coverage report comment on the PR.'
+                type: boolean
+                default: true
+            environment:
+                description: 'GitHub Actions environment to run in (Dev/Prod/etc).'
+                type: string
+                default: 'Dev'
+        secrets:
+            DOCKERHUB_USERNAME: { required: false }
+            DOCKERHUB_TOKEN:    { required: false }
+            DISCORD_API_KEY:    { required: false }
+            DISCORD_CHANNEL_ID: { required: false }
+            SSH_HOST:           { required: false }
+            SSH_USERNAME:       { required: false }
+            SSH_KEY:            { required: false }
+
+jobs:
+    build-and-test:
+        if: github.actor != 'dependabot[bot]'
+        environment: ${{ inputs.environment }}
+        runs-on: ubuntu-latest
+        permissions:
+            checks: write
+            pull-requests: write
+            packages: read
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v5
+
+            - name: Check for version label
+              if: ${{ ! (contains(github.event.pull_request.labels.*.name, 'major') || contains(github.event.pull_request.labels.*.name, 'minor') || contains(github.event.pull_request.labels.*.name, 'patch')) }}
+              run: |
+                  echo "::error::Pull Request must have a 'major', 'minor', or 'patch' label."
+                  exit 1
+
+            - name: Find previous coverage comment
+              if: inputs.coverage-comment
+              id: find-comment
+              uses: peter-evans/find-comment@v3
+              with:
+                  issue-number: ${{ github.event.pull_request.number }}
+                  comment-author: 'github-actions[bot]'
+                  body-includes: 'BongBot Development Build'
+
+            - name: Delete previous coverage comment
+              if: inputs.coverage-comment && steps.find-comment.outputs.comment-id != ''
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      github.rest.issues.deleteComment({
+                          owner: context.repo.owner,
+                          repo: context.repo.repo,
+                          comment_id: ${{ steps.find-comment.outputs.comment-id }}
+                      })
+
+            - name: Setup Bun
+              if: inputs.runtime == 'bun'
+              uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: latest
+
+            - name: Setup Node.js
+              if: inputs.runtime == 'node'
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  registry-url: https://npm.pkg.github.com
+
+            - name: Run unit tests with coverage (bun)
+              if: inputs.runtime == 'bun'
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  bun install --frozen-lockfile
+                  bun run test
+
+            - name: Run unit tests with coverage (node)
+              if: inputs.runtime == 'node'
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  npm ci
+                  npm run test
+
+            - name: Generate coverage report
+              if: inputs.coverage-comment
+              id: coverage
+              uses: PookieSoft/workflows/.github/actions/coverage-comment@v1
+
+            - name: Login to Docker Hub
+              if: inputs.build-docker
+              uses: docker/login-action@v3
+              with:
+                  username: ${{ secrets.DOCKERHUB_USERNAME }}
+                  password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+            - name: Build and push development image
+              if: inputs.build-docker
+              uses: docker/build-push-action@v6
+              with:
+                  context: .
+                  push: true
+                  secrets: |
+                      NODE_AUTH_TOKEN=${{ secrets.GITHUB_TOKEN }}
+                  tags: |
+                      ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.docker-image-name }}:pr-${{ github.event.pull_request.number }}
+                      ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.docker-image-name }}:latest
+
+            - name: Smoke-test container
+              if: inputs.smoke-test
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  PR_NUMBER: ${{ github.event.pull_request.number }}
+                  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.docker-image-name }}
+              run: |
+                  cat <<EOF > .env.test
+                  DISCORD_API_KEY=${{ secrets.DISCORD_API_KEY }}
+                  DISCORD_CHANNEL_ID=${{ secrets.DISCORD_CHANNEL_ID }}
+                  EOF
+
+                  docker run -d \
+                      --name smoke-test \
+                      --env-file ./.env.test \
+                      --env BRANCH=${{ github.head_ref }} \
+                      "$IMAGE:pr-$PR_NUMBER"
+
+                  echo "Waiting 15s for container to initialise..."
+                  sleep 15
+
+                  if [ "$(docker ps -q -f name=smoke-test)" ]; then
+                      echo "Smoke test passed."
+                      docker stop smoke-test
+                      docker rm smoke-test
+                  else
+                      LOGS=$(docker logs smoke-test 2>&1)
+                      docker rm smoke-test
+                      gh pr comment "$PR_NUMBER" --body "**Smoke Test Failed** :x:
+                  The container exited unexpectedly during the smoke test. Logs:
+                  \`\`\`
+                  ${LOGS}
+                  \`\`\`"
+                      exit 1
+                  fi
+
+            - name: SSH and (re)start service
+              if: inputs.ssh-deploy
+              uses: appleboy/ssh-action@master
+              env:
+                  BRANCH_NAME: ${{ github.head_ref }}
+                  SERVICE: ${{ inputs.service-name-prefix }}@${{ github.head_ref }}
+              with:
+                  host: ${{ secrets.SSH_HOST }}
+                  username: ${{ secrets.SSH_USERNAME }}
+                  key: ${{ secrets.SSH_KEY }}
+                  envs: BRANCH_NAME,SERVICE
+                  script: |
+                      if systemctl is-active --quiet "$SERVICE"; then
+                          echo "Service '$SERVICE' is running. Restarting..."
+                          sudo systemctl restart "$SERVICE"
+                      else
+                          echo "Service '$SERVICE' not running. Starting..."
+                          sudo systemctl start "$SERVICE"
+                      fi
+
+            - name: Post coverage and image comment
+              if: inputs.coverage-comment && inputs.build-docker
+              uses: peter-evans/create-or-update-comment@v4
+              with:
+                  issue-number: ${{ github.event.pull_request.number }}
+                  body: |
+                      **BongBot Development Build** :rocket:
+
+                      A new Docker image has been pushed for this pull request.
+                      The dev container will run for 1 hour after the build. Re-run this workflow to start it again.
+
+                      - **Image:** `${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.docker-image-name }}`
+                      - **Tag:** `pr-${{ github.event.pull_request.number }}`
+
+                      ```
+                      docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.docker-image-name }}:pr-${{ github.event.pull_request.number }}
+                      ```
+                      [View on Docker Hub](https://hub.docker.com/r/${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.docker-image-name }}/tags)
+
+                      <details>
+                      <summary>Coverage Report (click to expand)</summary>
+
+                      ${{ steps.coverage.outputs.report || ':x: Coverage report not available' }}
+
+                      </details>
+
+            - name: Post coverage-only comment
+              if: inputs.coverage-comment && ! inputs.build-docker
+              uses: peter-evans/create-or-update-comment@v4
+              with:
+                  issue-number: ${{ github.event.pull_request.number }}
+                  body: |
+                      <details>
+                      <summary>Coverage Report (click to expand)</summary>
+
+                      ${{ steps.coverage.outputs.report || ':x: Coverage report not available' }}
+
+                      </details>
