@@ -48,6 +48,10 @@ on:
                 description: 'GitHub Actions environment.'
                 type: string
                 default: 'Prod'
+            ssh-deploy:
+                description: 'Whether to SSH into the dev host and (re)start the per-branch service.'
+                type: boolean
+                default: false
         secrets:
             DOCKERHUB_USERNAME: { required: false }
             DOCKERHUB_TOKEN:    { required: false }
@@ -207,6 +211,26 @@ jobs:
                       ${{ github.event.head_commit.message }}
                   draft: false
                   prerelease: false
+
+            - name: SSH and (re)start service
+              if: inputs.ssh-deploy
+              uses: appleboy/ssh-action@master
+              env:
+                  BRANCH_NAME: ${{ github.head_ref }}
+                  SERVICE: ${{ inputs.service-name-prefix }}@${{ github.head_ref }}
+              with:
+                  host: ${{ secrets.SSH_HOST }}
+                  username: ${{ secrets.SSH_USERNAME }}
+                  key: ${{ secrets.SSH_KEY }}
+                  envs: BRANCH_NAME,SERVICE
+                  script: |
+                      if systemctl is-active --quiet "$SERVICE"; then
+                          echo "Service '$SERVICE' is running. Restarting..."
+                          sudo systemctl restart "$SERVICE"
+                      else
+                          echo "Service '$SERVICE' not running. Starting..."
+                          sudo systemctl start "$SERVICE"
+                      fi
 
     publish:
         if: inputs.publish-package
