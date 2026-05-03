@@ -77,10 +77,15 @@ jobs:
 
 ## Releasing
 
-1. Land changes via PR.
-2. Tag the new release: `git tag -a v1.0.1 -m "..."` then `git push origin v1.0.1`.
-3. Move the rolling major tag: `git tag -f v1 v1.0.1 && git push origin v1 --force`.
-4. For breaking changes, bump to `v2.0.0` and publish migration notes in the release.
+Releases are automatic. On every push to `main`, [`auto-tag.yml`](.github/workflows/auto-tag.yml) reads the merged PR's `major` / `minor` / `patch` label (with a commit-message fallback), computes the next semver from the latest `vX.Y.Z` tag, pushes the new annotated tag, force-moves the rolling `vX` tag, and creates a GitHub Release. Consumers pinned to `@v1` auto-roll forward.
+
+To cut a release: merge a PR with the appropriate version label. That's it.
+
+Manual fallback (only needed if `auto-tag` fails or to retag):
+
+1. Tag the release: `git tag -a v1.0.1 -m "..." && git push origin v1.0.1`.
+2. Move the rolling major tag: `git tag -f v1 v1.0.1 && git push origin v1 --force`.
+3. For breaking changes, bump the major (`v2.0.0`) and publish migration notes in the release.
 
 ## Access
 
