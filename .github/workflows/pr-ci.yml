@@ -187,7 +187,7 @@ jobs:
 
             - name: SSH and (re)start service
               if: inputs.ssh-deploy
-              uses: appleboy/ssh-action@master
+              uses: appleboy/ssh-action@v1.2.5
               env:
                   BRANCH_NAME: ${{ github.head_ref }}
                   SERVICE: ${{ inputs.service-name-prefix }}@${{ github.head_ref }}

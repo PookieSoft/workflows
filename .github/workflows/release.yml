@@ -71,6 +71,7 @@ jobs:
         runs-on: ubuntu-latest
         outputs:
             new_tag: ${{ steps.get_version.outputs.new_tag }}
+            level: ${{ steps.get_level.outputs.level }}
         permissions:
             contents: write
             pull-requests: read
@@ -197,28 +198,9 @@ jobs:
                       ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.docker-image-name }}:${{ steps.get_version.outputs.new_tag }}
                       ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.docker-image-name }}:latest
 
-            - name: Push new version tag
-              if: success()
-              uses: anothrNick/github-tag-action@1.75.0
-              env:
-                  GITHUB_TOKEN: ${{ github.token }}
-                  DEFAULT_BUMP: ${{ steps.get_level.outputs.level }}
-                  TAG_PREFIX: v
-
-            - name: Create GitHub Release
-              if: success()
-              uses: softprops/action-gh-release@v2
-              with:
-                  tag_name: ${{ steps.get_version.outputs.new_tag }}
-                  name: Release ${{ steps.get_version.outputs.new_tag }}
-                  body: |
-                      ${{ github.event.head_commit.message }}
-                  draft: false
-                  prerelease: false
-
             - name: SSH and (re)start service
               if: inputs.ssh-deploy
-              uses: appleboy/ssh-action@master
+              uses: appleboy/ssh-action@v1.2.5
               env:
                   SERVICE: ${{ inputs.service-name }}
               with:
@@ -273,3 +255,33 @@ jobs:
               env:
                   NODE_AUTH_TOKEN: ${{ github.token }}
               run: npm publish
+
+    version:
+        needs: release
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v5
+              with:
+                  fetch-depth: 0
+
+            - name: Push new version tag
+              if: success()
+              uses: anothrNick/github-tag-action@1.75.0
+              env:
+                  GITHUB_TOKEN: ${{ github.token }}
+                  DEFAULT_BUMP: ${{ needs.release.outputs.level }}
+                  TAG_PREFIX: v
+
+            - name: Create GitHub Release
+              if: success()
+              uses: softprops/action-gh-release@v2
+              with:
+                  tag_name: ${{ needs.release.outputs.new_tag }}
+                  name: Release ${{ needs.release.outputs.new_tag }}
+                  body: |
+                      ${{ github.event.head_commit.message }}
+                  draft: false
+                  prerelease: false

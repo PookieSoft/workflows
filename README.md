@@ -23,7 +23,6 @@ uses: PookieSoft/workflows/.github/workflows/<workflow>.yml@<sha>
 
 | Workflow | Purpose | Required inputs |
 |---|---|---|
-| [`dependabot-auto-label.yml`](.github/workflows/dependabot-auto-label.yml) | Strip `major`/`minor` from Dependabot PRs and ensure only `patch` is set | none |
 | [`security-scan.yml`](.github/workflows/security-scan.yml) | Trivy scan of repo filesystem (always) and Docker image (main only) | `docker-image-name` |
 | [`docker-vuln-pr.yml`](.github/workflows/docker-vuln-pr.yml) | On main: snapshot CVE baseline. On schedule: open a PR if new CVEs appeared | `docker-image-name` |
 | [`pr-ci.yml`](.github/workflows/pr-ci.yml) | Human-PR CI: tests, coverage comment, optional Docker build/smoke/SSH-deploy | `runtime` |
@@ -43,19 +42,28 @@ uses: PookieSoft/workflows/.github/workflows/<workflow>.yml@<sha>
 Each consumer repo holds a thin caller workflow. Example:
 
 ```yaml
-# .github/workflows/dependabot-auto-label.yml in a consumer repo
-name: Dependabot auto-label
+# .github/workflows/pr-ci.yml in a consumer repo
+name: PR CI
 
 on:
-    pull_request_target:
-        types: [opened, reopened, labeled]
+    pull_request:
+        types: [opened, synchronize]
+        branches: [main]
 
 permissions:
     pull-requests: write
 
 jobs:
-    auto-label:
-        uses: PookieSoft/workflows/.github/workflows/dependabot-auto-label.yml@v1
+    ci:
+        uses: PookieSoft/workflows/.github/workflows/pr-ci.yml@v1
+        with:
+            runtime: bun
+            build-docker: true
+            smoke-test: true
+            ssh-deploy: true
+            docker-image-name: bongbot-develop
+            service-name-prefix: bongbot-develop
+            environment: Dev
         secrets: inherit
 ```
 
@@ -69,10 +77,15 @@ jobs:
 
 ## Releasing
 
-1. Land changes via PR.
-2. Tag the new release: `git tag -a v1.0.1 -m "..."` then `git push origin v1.0.1`.
-3. Move the rolling major tag: `git tag -f v1 v1.0.1 && git push origin v1 --force`.
-4. For breaking changes, bump to `v2.0.0` and publish migration notes in the release.
+Releases are automatic. On every push to `main`, [`auto-tag.yml`](.github/workflows/auto-tag.yml) reads the merged PR's `major` / `minor` / `patch` label (with a commit-message fallback), computes the next semver from the latest `vX.Y.Z` tag, pushes the new annotated tag, force-moves the rolling `vX` tag, and creates a GitHub Release. Consumers pinned to `@v1` auto-roll forward.
+
+To cut a release: merge a PR with the appropriate version label. That's it.
+
+Manual fallback (only needed if `auto-tag` fails or to retag):
+
+1. Tag the release: `git tag -a v1.0.1 -m "..." && git push origin v1.0.1`.
+2. Move the rolling major tag: `git tag -f v1 v1.0.1 && git push origin v1 --force`.
+3. For breaking changes, bump the major (`v2.0.0`) and publish migration notes in the release.
 
 ## Access
 
