@@ -23,7 +23,6 @@ uses: PookieSoft/workflows/.github/workflows/<workflow>.yml@<sha>
 
 | Workflow | Purpose | Required inputs |
 |---|---|---|
-| [`dependabot-auto-label.yml`](.github/workflows/dependabot-auto-label.yml) | Strip `major`/`minor` from Dependabot PRs and ensure only `patch` is set | none |
 | [`security-scan.yml`](.github/workflows/security-scan.yml) | Trivy scan of repo filesystem (always) and Docker image (main only) | `docker-image-name` |
 | [`docker-vuln-pr.yml`](.github/workflows/docker-vuln-pr.yml) | On main: snapshot CVE baseline. On schedule: open a PR if new CVEs appeared | `docker-image-name` |
 | [`pr-ci.yml`](.github/workflows/pr-ci.yml) | Human-PR CI: tests, coverage comment, optional Docker build/smoke/SSH-deploy | `runtime` |
@@ -43,19 +42,28 @@ uses: PookieSoft/workflows/.github/workflows/<workflow>.yml@<sha>
 Each consumer repo holds a thin caller workflow. Example:
 
 ```yaml
-# .github/workflows/dependabot-auto-label.yml in a consumer repo
-name: Dependabot auto-label
+# .github/workflows/pr-ci.yml in a consumer repo
+name: PR CI
 
 on:
-    pull_request_target:
-        types: [opened, reopened, labeled]
+    pull_request:
+        types: [opened, synchronize]
+        branches: [main]
 
 permissions:
     pull-requests: write
 
 jobs:
-    auto-label:
-        uses: PookieSoft/workflows/.github/workflows/dependabot-auto-label.yml@v1
+    ci:
+        uses: PookieSoft/workflows/.github/workflows/pr-ci.yml@v1
+        with:
+            runtime: bun
+            build-docker: true
+            smoke-test: true
+            ssh-deploy: true
+            docker-image-name: bongbot-develop
+            service-name-prefix: bongbot-develop
+            environment: Dev
         secrets: inherit
 ```
 
