@@ -53,7 +53,7 @@ on:
                 type: boolean
                 default: false
             service-name:
-                description: 'systemd unit name prefix for ssh-deploy.`.'
+                description: 'systemd unit name for ssh-deploy. Required when ssh-deploy is true.'
                 type: string
                 default: ''
         secrets:
@@ -220,13 +220,12 @@ jobs:
               if: inputs.ssh-deploy
               uses: appleboy/ssh-action@master
               env:
-                  BRANCH_NAME: ${{ github.head_ref }}
                   SERVICE: ${{ inputs.service-name }}
               with:
                   host: ${{ secrets.SSH_HOST }}
                   username: ${{ secrets.SSH_USERNAME }}
                   key: ${{ secrets.SSH_KEY }}
-                  envs: BRANCH_NAME,SERVICE
+                  envs: SERVICE
                   script: |
                       if systemctl is-active --quiet "$SERVICE"; then
                           echo "Service '$SERVICE' is running. Restarting..."
@@ -244,16 +243,28 @@ jobs:
             - name: Checkout code
               uses: actions/checkout@v5
 
-            - name: Setup Node.js
+            - name: Setup runtime
+              uses: PookieSoft/workflows/.github/actions/setup-runtime@v1
+              with:
+                  runtime: ${{ inputs.runtime }}
+
+            - name: Install dependencies
+              uses: PookieSoft/workflows/.github/actions/install-deps@v1
+              with:
+                  runtime: ${{ inputs.runtime }}
+              env:
+                  NODE_AUTH_TOKEN: ${{ github.token }}
+
+            # setup-runtime configures node + the GitHub Packages registry when
+            # runtime=node. For runtime=bun we still need npm available on PATH
+            # (bun publish doesn't target GitHub Packages) and a registry-scoped
+            # .npmrc, so layer setup-node on top in that case only.
+            - name: Setup Node.js for npm publish
+              if: inputs.runtime == 'bun'
               uses: actions/setup-node@v4
               with:
                   node-version: 24
                   registry-url: https://npm.pkg.github.com
-
-            - name: Install dependencies
-              env:
-                  NODE_AUTH_TOKEN: ${{ github.token }}
-              run: npm ci
 
             - name: Set version
               run: npm version "${{ needs.release.outputs.new_tag }}" --no-git-tag-version --allow-same-version
